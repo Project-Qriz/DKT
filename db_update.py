@@ -3,10 +3,10 @@ import pymysql
 
 def connect_db():
     return pymysql.connect(
-        host='your-rds-hostname',
-        user='your-username',
-        password='your-password',
-        db='your-database-name',
+        host='mydb',
+        user='mydb',
+        password='testmydb1',
+        db='qriz',
         charset='utf8mb4',
         cursorclass=pymysql.cursors.DictCursor
     )
