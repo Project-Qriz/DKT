@@ -9,10 +9,10 @@ from db_update import update_predictions  # db_update 모듈에서 함수 임포
 def connect_db():
     try:
         conn = pymysql.connect(
-            host='your-rds-hostname',
-            user='your-username',
-            password='your-password',
-            db='your-database-name',
+            host='mydb',
+            user='mydb',
+            password='testmydb1',
+            db='qriz',
             charset='utf8mb4',
             cursorclass=pymysql.cursors.DictCursor
         )
@@ -104,5 +104,4 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 train(model, train_loader, optimizer)
 
 # 예측 후 결과 업데이트
-# 이 부분은 실제 예측 값과 사용자 ID를 가지고 호출해야 함
-# 예시: update_predictions(user_id, skill_id, predict_accuracy)
+update_predictions(user_id, skill_id, predict_accuracy)
