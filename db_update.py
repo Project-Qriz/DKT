@@ -1,22 +1,21 @@
-# db_update.py
 import pymysql
 
 def connect_db():
     return pymysql.connect(
-        host='mydb',
-        user='mydb',
-        password='testmydb1',
-        db='qriz',
-        charset='utf8mb4',
-        cursorclass=pymysql.cursors.DictCursor
-    )
+            host='localhost',
+            user='root',
+            password='1234',
+            db='qriz',
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
 
 def update_predictions(user_id, skill_id, predict_accuracy):
     conn = connect_db()
     try:
         with conn.cursor() as cursor:
             sql = """
-            UPDATE SkillLevel
+            UPDATE skill_level
             SET predict_accuracy = %s, last_updated = CURRENT_TIMESTAMP
             WHERE user_id = %s AND skill_id = %s
             """
