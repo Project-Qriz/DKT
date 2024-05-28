@@ -19,7 +19,7 @@ def connect_db():
         )
         return conn
     except Exception as e:
-        print("Database connection failed due to {}".format(e))
+        print(f"Database connection failed due to {e}")
         return None
 
 # 데이터 로드 함수
@@ -28,12 +28,18 @@ def load_activities():
     if conn is not None:
         try:
             with conn.cursor() as cursor:
-                sql = "SELECT * FROM user_activity"
+                # category가 2인 question_id만 선택
+                sql = """
+                SELECT ua.*
+                FROM user_activity ua
+                JOIN question q ON ua.question_id = q.question_id
+                WHERE q.category = 2
+                """
                 cursor.execute(sql)
                 activities = cursor.fetchall()
                 return activities
         except Exception as e:
-            print("Failed to load data due to {}".format(e))
+            print(f"Failed to load data due to {e}")
         finally:
             conn.close()
 
@@ -45,13 +51,16 @@ class DKTModel(Module):
         self.emb_size = emb_size
         self.hidden_size = hidden_size
         self.interaction_emb = Embedding(num_q * 2 + 1, emb_size)  # +1 for the padding index
+        self.time_emb = Linear(1, emb_size)
         self.lstm = LSTM(emb_size, hidden_size, batch_first=True)
         self.fc = Linear(hidden_size, num_q)
         self.dropout = Dropout(0.5)
 
-    def forward(self, questions, responses):
+    def forward(self, questions, responses, times_spent):
         interactions = questions + self.num_q * responses
         x = self.interaction_emb(interactions)
+        time_emb = self.time_emb(times_spent.unsqueeze(-1))
+        x = x + time_emb
         x, _ = self.lstm(x)
         x = self.fc(x)
         x = self.dropout(x)
@@ -75,6 +84,8 @@ class UserActivityDataset(Dataset):
         
         q_ids = [activity['question_id'] for activity in user_activities]
         responses = [1 if activity['correction'] else 0 for activity in user_activities]
+        times_spent = [activity['time_spent'] for activity in user_activities]
+        
         seq_len = len(q_ids)
 
         # Ensure indices are within the embedding range
@@ -84,20 +95,22 @@ class UserActivityDataset(Dataset):
         if seq_len < self.max_seq_len:
             q_ids += [self.num_q * 2] * (self.max_seq_len - seq_len)  # Use out-of-bound index for padding
             responses += [0] * (self.max_seq_len - seq_len)
+            times_spent += [0] * (self.max_seq_len - seq_len)
         else:
             q_ids = q_ids[:self.max_seq_len]
             responses = responses[:self.max_seq_len]
+            times_spent = times_spent[:self.max_seq_len]
 
-        return torch.tensor(q_ids, dtype=torch.long), torch.tensor(responses, dtype=torch.long), user_id
+        return torch.tensor(q_ids, dtype=torch.long), torch.tensor(responses, dtype=torch.long), torch.tensor(times_spent, dtype=torch.float), user_id
 
 # 모델 훈련 함수
 def train(model, train_loader, optimizer, num_epochs=10):
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
-        for questions, responses, _ in train_loader:
+        for questions, responses, times_spent, _ in train_loader:
             optimizer.zero_grad()
-            predictions = model(questions, responses)
+            predictions = model(questions, responses, times_spent)
             predictions = predictions.view(-1, predictions.size(-1))  # (batch_size * seq_len, num_q)
             responses = responses.view(-1)  # (batch_size * seq_len)
             predictions = predictions.gather(1, responses.view(-1, 1)).squeeze(1)  # gather predictions for the actual questions
@@ -112,28 +125,27 @@ def predict(model, dataset, num_q):
     model.eval()
     predictions = {}
     with torch.no_grad():
-        for questions, responses, user_id in dataset:
-            questions, responses = questions.unsqueeze(0), responses.unsqueeze(0)
-            output = model(questions, responses)
-            preds = output.squeeze(0).detach().numpy()
-            predictions[user_id] = preds.mean(axis=0)
+        for questions, responses, times_spent, user_id in DataLoader(dataset, batch_size=1):
+            output = model(questions, responses, times_spent)
+            preds = output.squeeze(0).view(-1).detach().numpy()  # Flatten the predictions to 1D array
+            predictions[user_id.item()] = preds  # user_id를 스칼라로 변환하여 사용
     return predictions
 
 # difficulty 가져오는 함수
-def get_question_difficulty(question_id):
+def get_question_difficulty_and_skill_id(question_id):
     conn = connect_db()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT difficulty FROM question WHERE question_id = %s"
+            sql = "SELECT difficulty, skill_id FROM question WHERE question_id = %s"
             cursor.execute(sql, (question_id,))
             result = cursor.fetchone()
             if result:
-                return result['difficulty']
+                return result['difficulty'], result['skill_id']
             else:
-                return None
+                return None, None
     except Exception as e:
-        print(f"Failed to get question difficulty due to {e}")
-        return None
+        print(f"Failed to get question difficulty and skill_id due to {e}")
+        return None, None
     finally:
         conn.close()
 
@@ -143,6 +155,11 @@ def update_skill_level(user_id, skill_id, predict_accuracy, current_accuracy, di
     try:
         with conn.cursor() as cursor:
             # 먼저 해당 user_id와 skill_id에 대한 행이 존재하는지 확인합니다.
+            cursor.execute("SELECT 1 FROM skill WHERE skill_id = %s", (skill_id,))
+            if cursor.fetchone() is None:
+                print(f"Skill ID {skill_id} does not exist. Skipping update.")
+                return
+            
             cursor.execute("SELECT 1 FROM skill_level WHERE user_id = %s AND skill_id = %s", (user_id, skill_id))
             exists = cursor.fetchone()
             
@@ -192,8 +209,24 @@ train(model, train_loader, optimizer)
 predictions = predict(model, train_dataset, num_q)
 for user_id, predict_accuracy in predictions.items():
     current_accuracy = calculate_current_accuracy(user_id, activities)  # current_accuracy 계산
-    for skill_id, accuracy in enumerate(predict_accuracy):
-        # question_id를 기반으로 difficulty 가져오기
-        difficulty = get_question_difficulty(skill_id + 1)  # skill_id는 0부터 시작하므로 1을 더합니다.
-        print(f'Updating user_id: {user_id}, skill_id: {skill_id}, predict_accuracy: {accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}')
-        update_skill_level(user_id, skill_id, accuracy, current_accuracy, difficulty)
+    user_activities = [activity for activity in activities if activity['user_id'] == user_id]
+    question_ids = set(activity['question_id'] for activity in user_activities)  # 사용자가 푼 문제의 question_id 집합
+
+    for question_id in question_ids:
+        try:
+            # question_id는 1부터 시작하는데, index로 사용하기 위해 0부터 시작하도록 수정합니다.
+            question_index = question_id - 1
+            if question_index < len(predict_accuracy):
+                # predict_accuracy 배열의 내용을 출력하여 디버깅
+                print(f'user_id: {user_id}, predict_accuracy: {predict_accuracy}')
+                accuracy = predict_accuracy[question_index]  # predict_accuracy에서 값을 추출
+                if hasattr(accuracy, 'item'):  # 값이 텐서인 경우
+                    accuracy = accuracy.item()  # 스칼라 값으로 변환
+                difficulty, skill_id = get_question_difficulty_and_skill_id(question_id)
+                if difficulty is None or skill_id is None:
+                    print(f'Skipping question_id {question_id} for user_id {user_id} due to missing difficulty or skill_id.')
+                    continue  # skip if difficulty or skill_id is not found
+                print(f'Updating user_id: {user_id}, question_id: {question_id}, predict_accuracy: {accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}, skill_id: {skill_id}')
+                update_skill_level(user_id, skill_id, accuracy, current_accuracy, difficulty)
+        except Exception as e:
+            print(f"Error processing question_id {question_id} for user_id {user_id}: {e}")
