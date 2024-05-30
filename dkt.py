@@ -1,3 +1,4 @@
+import json
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module, Embedding, LSTM, Linear, Dropout
@@ -5,6 +6,8 @@ import torch.nn.functional as F
 import pymysql
 from db_update import update_predictions  # db_update 모듈에서 함수 임포트
 from datetime import datetime
+import os
+import numpy as np  # numpy 모듈 임포트
 
 # 데이터베이스 연결 함수
 def connect_db():
@@ -30,7 +33,7 @@ def load_activities():
             with conn.cursor() as cursor:
                 # category가 2인 question_id만 선택
                 sql = """
-                SELECT ua.*
+                SELECT ua.*, q.skill_id, q.difficulty
                 FROM user_activity ua
                 JOIN question q ON ua.question_id = q.question_id
                 WHERE q.category = 2
@@ -127,11 +130,11 @@ def predict(model, dataset, num_q):
     with torch.no_grad():
         for questions, responses, times_spent, user_id in DataLoader(dataset, batch_size=1):
             output = model(questions, responses, times_spent)
-            preds = output.squeeze(0).view(-1).detach().numpy()  # Flatten the predictions to 1D array
+            preds = output.squeeze(0).detach().numpy()
             predictions[user_id.item()] = preds  # user_id를 스칼라로 변환하여 사용
     return predictions
 
-# difficulty 가져오는 함수
+# difficulty와 skill_id를 가져오는 함수
 def get_question_difficulty_and_skill_id(question_id):
     conn = connect_db()
     try:
@@ -160,16 +163,16 @@ def update_skill_level(user_id, skill_id, predict_accuracy, current_accuracy, di
                 print(f"Skill ID {skill_id} does not exist. Skipping update.")
                 return
             
-            cursor.execute("SELECT 1 FROM skill_level WHERE user_id = %s AND skill_id = %s", (user_id, skill_id))
+            cursor.execute("SELECT 1 FROM skill_level WHERE user_id = %s AND skill_id = %s AND difficulty = %s", (user_id, skill_id, difficulty))
             exists = cursor.fetchone()
             
             if exists:
                 sql = """
                 UPDATE skill_level
-                SET predict_accuracy = %s, current_accuracy = %s, difficulty = %s, last_updated = %s
-                WHERE user_id = %s AND skill_id = %s
+                SET predict_accuracy = %s, current_accuracy = %s, last_updated = %s
+                WHERE user_id = %s AND skill_id = %s AND difficulty = %s
                 """
-                cursor.execute(sql, (predict_accuracy, current_accuracy, difficulty, datetime.now(), user_id, skill_id))
+                cursor.execute(sql, (predict_accuracy, current_accuracy, datetime.now(), user_id, skill_id, difficulty))
             else:
                 sql = """
                 INSERT INTO skill_level (user_id, skill_id, predict_accuracy, current_accuracy, difficulty, last_updated)
@@ -184,14 +187,12 @@ def update_skill_level(user_id, skill_id, predict_accuracy, current_accuracy, di
         conn.close()
 
 # current_accuracy 계산 함수
-def calculate_current_accuracy(user_id, activities, num_recent=10):
-    user_activities = [activity for activity in activities if activity['user_id'] == user_id]
+def calculate_current_accuracy(user_id, skill_id, difficulty, activities):
+    user_activities = [activity for activity in activities if activity['user_id'] == user_id and activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
     if len(user_activities) == 0:
         return 0.0
-    # 최근 num_recent 개의 활동만 사용
-    recent_activities = user_activities[-num_recent:]
-    correct_answers = sum(1 if activity['correction'] else 0 for activity in recent_activities)  # 'correction' 값을 직접 int로 변환
-    return correct_answers / len(recent_activities)
+    correct_answers = sum(1 if activity['correction'] else 0 for activity in user_activities)
+    return correct_answers / len(user_activities)
 
 # 데이터 로드 및 모델 설정
 activities = load_activities()
@@ -202,31 +203,40 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# 훈련 시작
-train(model, train_loader, optimizer)
+# 모델 저장 경로
+model_path = 'dkt_model.pth'
+
+# 모델이 저장되어 있는 경우 로드
+if (os.path.exists(model_path)):
+    model.load_state_dict(torch.load(model_path))
+    print("Model loaded from disk.")
+else:
+    # 모델 훈련 시작
+    train(model, train_loader, optimizer)
+    # 훈련된 모델 저장
+    torch.save(model.state_dict(), model_path)
+    print("Model trained and saved to disk.")
 
 # 예측 및 결과 업데이트
 predictions = predict(model, train_dataset, num_q)
 for user_id, predict_accuracy in predictions.items():
-    current_accuracy = calculate_current_accuracy(user_id, activities)  # current_accuracy 계산
     user_activities = [activity for activity in activities if activity['user_id'] == user_id]
-    question_ids = set(activity['question_id'] for activity in user_activities)  # 사용자가 푼 문제의 question_id 집합
+    skill_ids = set(activity['skill_id'] for activity in user_activities)  # 사용자가 푼 문제의 skill_id 집합
 
-    for question_id in question_ids:
-        try:
-            # question_id는 1부터 시작하는데, index로 사용하기 위해 0부터 시작하도록 수정합니다.
-            question_index = question_id - 1
-            if question_index < len(predict_accuracy):
-                # predict_accuracy 배열의 내용을 출력하여 디버깅
-                print(f'user_id: {user_id}, predict_accuracy: {predict_accuracy}')
-                accuracy = predict_accuracy[question_index]  # predict_accuracy에서 값을 추출
-                if hasattr(accuracy, 'item'):  # 값이 텐서인 경우
-                    accuracy = accuracy.item()  # 스칼라 값으로 변환
-                difficulty, skill_id = get_question_difficulty_and_skill_id(question_id)
-                if difficulty is None or skill_id is None:
-                    print(f'Skipping question_id {question_id} for user_id {user_id} due to missing difficulty or skill_id.')
-                    continue  # skip if difficulty or skill_id is not found
-                print(f'Updating user_id: {user_id}, question_id: {question_id}, predict_accuracy: {accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}, skill_id: {skill_id}')
-                update_skill_level(user_id, skill_id, accuracy, current_accuracy, difficulty)
-        except Exception as e:
-            print(f"Error processing question_id {question_id} for user_id {user_id}: {e}")
+    for skill_id in skill_ids:
+        difficulties = set(activity['difficulty'] for activity in user_activities if activity['skill_id'] == skill_id)
+        
+        for difficulty in difficulties:
+            current_accuracy = calculate_current_accuracy(user_id, skill_id, difficulty, activities)  # current_accuracy 계산
+            skill_predict_accuracies = [predict_accuracy[i] for i, activity in enumerate(user_activities) if activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
+            
+            if skill_predict_accuracies:
+                avg_predict_accuracy = np.mean(skill_predict_accuracies)
+                question_ids = [activity['question_id'] for activity in user_activities if activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
+
+                for question_id in question_ids:
+                    try:
+                        print(f'Updating user_id: {user_id}, question_id: {question_id}, predict_accuracy: {avg_predict_accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}, skill_id: {skill_id}')
+                        update_skill_level(user_id, skill_id, avg_predict_accuracy, current_accuracy, difficulty)
+                    except Exception as e:
+                        print(f"Error processing question_id {question_id} for user_id {user_id}: {e}")
