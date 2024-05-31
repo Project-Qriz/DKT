@@ -186,13 +186,21 @@ def update_skill_level(user_id, skill_id, predict_accuracy, current_accuracy, di
     finally:
         conn.close()
 
+# correction 값 변환 함수
+def correction_to_int(correction):
+    return 1 if correction == b'\x01' else 0
+
 # current_accuracy 계산 함수
 def calculate_current_accuracy(user_id, skill_id, difficulty, activities):
     user_activities = [activity for activity in activities if activity['user_id'] == user_id and activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
+    print(f"User {user_id}, Skill {skill_id}, Difficulty {difficulty}: Total activities = {len(user_activities)}")
     if len(user_activities) == 0:
         return 0.0
-    correct_answers = sum(1 if activity['correction'] else 0 for activity in user_activities)
-    return correct_answers / len(user_activities)
+    correct_answers = sum(correction_to_int(activity['correction']) for activity in user_activities)  # correction 값을 변환하여 합산
+    total_activities = len(user_activities)
+    accuracy = correct_answers / total_activities if total_activities > 0 else 0.0
+    print(f"User {user_id}, Skill {skill_id}, Difficulty {difficulty}: Correct answers = {correct_answers}, Accuracy = {accuracy}")
+    return accuracy
 
 # 데이터 로드 및 모델 설정
 activities = load_activities()
