@@ -33,7 +33,7 @@ def load_activities():
             with conn.cursor() as cursor:
                 # category가 2인 question_id만 선택
                 sql = """
-                SELECT ua.*, q.skill_id, q.difficulty
+                SELECT ua.*, q.skill_id, q.difficulty, q.answer
                 FROM user_activity ua
                 JOIN question q ON ua.question_id = q.question_id
                 WHERE q.category = 2
@@ -86,7 +86,7 @@ class UserActivityDataset(Dataset):
         user_activities = [activity for activity in self.activities if activity['user_id'] == user_id]
         
         q_ids = [activity['question_id'] for activity in user_activities]
-        responses = [1 if activity['correction'] else 0 for activity in user_activities]
+        responses = [1 if activity['checked'] == activity['answer'] else 0 for activity in user_activities]
         times_spent = [activity['time_spent'] for activity in user_activities]
         
         seq_len = len(q_ids)
