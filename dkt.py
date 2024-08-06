@@ -4,10 +4,10 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module, Embedding, LSTM, Linear, Dropout
 import torch.nn.functional as F
 import pymysql
-from db_update import update_predictions  # db_update 모듈에서 함수 임포트
+from db_update import update_predictions
 from datetime import datetime
 import os
-import numpy as np  # numpy 모듈 임포트
+import numpy as np
 
 # 데이터베이스 연결 함수
 def connect_db():
@@ -31,9 +31,9 @@ def load_activities():
     if conn is not None:
         try:
             with conn.cursor() as cursor:
-                # category가 2인 question_id만 선택
                 sql = """
-                SELECT ua.*, q.skill_id, q.difficulty, q.answer
+                SELECT ua.*, activity_id, ua.user_id, ua.question_id, ua.checked, ua.time_spent, 
+                       q.skill_id, q.difficulty, q.answer
                 FROM user_activity ua
                 JOIN question q ON ua.question_id = q.question_id
                 WHERE q.category = 2
@@ -45,6 +45,7 @@ def load_activities():
             print(f"Failed to load data due to {e}")
         finally:
             conn.close()
+    return []
 
 # DKT 모델 정의
 class DKTModel(Module):
@@ -72,21 +73,20 @@ class DKTModel(Module):
 
 # 사용자 활동 데이터셋 클래스
 class UserActivityDataset(Dataset):
-    def __init__(self, activities, max_seq_len, num_q):
+    def __init__(self, activities, user_id, max_seq_len, num_q):
         self.activities = activities
         self.max_seq_len = max_seq_len
         self.num_q = num_q
-        self.user_ids = list(set(activity['user_id'] for activity in activities))
+        self.user_id = user_id  # user_id를 인스턴스 변수로 저장
 
     def __len__(self):
-        return len(self.user_ids)
+        return 1  # 단일 사용자 데이터셋이므로 길이는 1
 
     def __getitem__(self, idx):
-        user_id = self.user_ids[idx]
-        user_activities = [activity for activity in self.activities if activity['user_id'] == user_id]
+        user_activities = self.activities  # 이미 단일 사용자의 활동만 포함되어 있다고 가정
         
         q_ids = [activity['question_id'] for activity in user_activities]
-        responses = [1 if activity['checked'] == activity['answer'] else 0 for activity in user_activities]
+        responses = [1 if activity['correct'] == 1 else 0 for activity in user_activities]
         times_spent = [activity['time_spent'] for activity in user_activities]
         
         seq_len = len(q_ids)
@@ -104,7 +104,29 @@ class UserActivityDataset(Dataset):
             responses = responses[:self.max_seq_len]
             times_spent = times_spent[:self.max_seq_len]
 
-        return torch.tensor(q_ids, dtype=torch.long), torch.tensor(responses, dtype=torch.long), torch.tensor(times_spent, dtype=torch.float), user_id
+        return torch.tensor(q_ids, dtype=torch.long), torch.tensor(responses, dtype=torch.long), torch.tensor(times_spent, dtype=torch.float), self.user_id
+
+# 모델 훈련 함수
+def train_model(train_loader, num_q, num_epochs=10):
+    model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
+        for questions, responses, times_spent, _ in train_loader:
+            optimizer.zero_grad()
+            predictions = model(questions, responses, times_spent)
+            predictions = predictions.view(-1, predictions.size(-1))
+            responses = responses.view(-1)
+            predictions = predictions.gather(1, responses.view(-1, 1)).squeeze(1)
+            loss = F.binary_cross_entropy(predictions, responses.float())
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f'Epoch {epoch + 1}, Loss: {total_loss}')
+    
+    return model
 
 # 모델 훈련 함수
 def train(model, train_loader, optimizer, num_epochs=10):
@@ -123,16 +145,101 @@ def train(model, train_loader, optimizer, num_epochs=10):
             total_loss += loss.item()
         print(f'Epoch {epoch + 1}, Loss: {total_loss}')
 
+
 # 예측 함수
-def predict(model, dataset, num_q):
+def predict(model, dataset, num_q, user_id):
     model.eval()
     predictions = {}
     with torch.no_grad():
-        for questions, responses, times_spent, user_id in DataLoader(dataset, batch_size=1):
-            output = model(questions, responses, times_spent)
-            preds = output.squeeze(0).detach().numpy()
-            predictions[user_id.item()] = preds  # user_id를 스칼라로 변환하여 사용
+        questions, responses, times_spent, _ = dataset[0]  # 단일 사용자 데이터셋이므로 인덱스 0
+        output = model(questions.unsqueeze(0), responses.unsqueeze(0), times_spent.unsqueeze(0))
+        preds = output.squeeze(0).detach().numpy()
+        predictions[user_id] = preds
     return predictions
+
+# 모델 저장 함수
+def save_model(model, num_q, model_path='dkt_model.pth'):
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'num_q': num_q
+    }, model_path)
+    print(f"Model saved with num_q = {num_q}")
+
+# 모델 로드 함수
+def load_model(model_path, current_num_q):
+    if os.path.exists(model_path):
+        checkpoint = torch.load(model_path)
+        saved_num_q = checkpoint.get('num_q')
+        
+        if saved_num_q is None:
+            print("The saved model doesn't have num_q information. Training new model...")
+            return None
+        
+        if saved_num_q != current_num_q:
+            print(f"Mismatch in num_q: saved={saved_num_q}, current={current_num_q}")
+            print("Training new model...")
+            return None
+        
+        model = DKTModel(num_q=current_num_q, emb_size=128, hidden_size=256)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
+        print(f"Model loaded with num_q = {current_num_q}")
+        return model
+    else:
+        print("No saved model found. Training new model...")
+        return None
+
+# 메인 실행 함수
+def main():
+    activities = load_activities()
+    
+    # 데이터 전처리 추가
+    all_skill_ids = set(activity['skill_id'] for activity in activities)
+    skill_id_map = {skill_id: i for i, skill_id in enumerate(sorted(all_skill_ids))}
+    
+    for activity in activities:
+        activity['skill_id'] = skill_id_map[activity['skill_id']]
+    
+    num_q = len(skill_id_map)
+    
+    max_seq_len = 100
+    train_dataset = UserActivityDataset(activities, max_seq_len, num_q)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    
+    model_path = 'dkt_model.pth'
+    
+    model = load_model(model_path, num_q)
+    if model is None:
+        model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        train(model, train_loader, optimizer)
+        save_model(model, num_q, model_path)
+    
+    # 예측 및 결과 업데이트
+    predictions = predict(model, train_dataset, num_q)
+    for user_id, predict_accuracy in predictions.items():
+        user_activities = [activity for activity in activities if activity['user_id'] == user_id]
+        skill_ids = set(activity['skill_id'] for activity in user_activities)
+
+        for skill_id in skill_ids:
+            difficulties = set(activity['difficulty'] for activity in user_activities if activity['skill_id'] == skill_id)
+            
+            for difficulty in difficulties:
+                current_accuracy = calculate_current_accuracy(user_id, skill_id, difficulty, activities)
+                skill_predict_accuracies = [predict_accuracy[activity['skill_id']] for activity in user_activities if activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
+                
+                if skill_predict_accuracies:
+                    avg_predict_accuracy = np.mean(skill_predict_accuracies)
+                    
+                    try:
+                        print(f'Updating user_id: {user_id}, predict_accuracy: {avg_predict_accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}, skill_id: {skill_id}')
+                        update_skill_level(user_id, skill_id, avg_predict_accuracy, current_accuracy, difficulty)
+                    except Exception as e:
+                        print(f"Error processing skill_id {skill_id} for user_id {user_id}: {e}")
+
+    
+if __name__ == "__main__":
+    main()
 
 # difficulty와 skill_id를 가져오는 함수
 def get_question_difficulty_and_skill_id(question_id):
@@ -201,50 +308,3 @@ def calculate_current_accuracy(user_id, skill_id, difficulty, activities):
     accuracy = correct_answers / total_activities if total_activities > 0 else 0.0
     print(f"User {user_id}, Skill {skill_id}, Difficulty {difficulty}: Correct answers = {correct_answers}, Accuracy = {accuracy}")
     return accuracy
-
-# 데이터 로드 및 모델 설정
-activities = load_activities()
-num_q = 100
-max_seq_len = 100
-train_dataset = UserActivityDataset(activities, max_seq_len, num_q)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-# 모델 저장 경로
-model_path = 'dkt_model.pth'
-
-# 모델이 저장되어 있는 경우 로드
-if (os.path.exists(model_path)):
-    model.load_state_dict(torch.load(model_path))
-    print("Model loaded from disk.")
-else:
-    # 모델 훈련 시작
-    train(model, train_loader, optimizer)
-    # 훈련된 모델 저장
-    torch.save(model.state_dict(), model_path)
-    print("Model trained and saved to disk.")
-
-# 예측 및 결과 업데이트
-predictions = predict(model, train_dataset, num_q)
-for user_id, predict_accuracy in predictions.items():
-    user_activities = [activity for activity in activities if activity['user_id'] == user_id]
-    skill_ids = set(activity['skill_id'] for activity in user_activities)  # 사용자가 푼 문제의 skill_id 집합
-
-    for skill_id in skill_ids:
-        difficulties = set(activity['difficulty'] for activity in user_activities if activity['skill_id'] == skill_id)
-        
-        for difficulty in difficulties:
-            current_accuracy = calculate_current_accuracy(user_id, skill_id, difficulty, activities)  # current_accuracy 계산
-            skill_predict_accuracies = [predict_accuracy[i] for i, activity in enumerate(user_activities) if activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
-            
-            if skill_predict_accuracies:
-                avg_predict_accuracy = np.mean(skill_predict_accuracies)
-                question_ids = [activity['question_id'] for activity in user_activities if activity['skill_id'] == skill_id and activity['difficulty'] == difficulty]
-
-                for question_id in question_ids:
-                    try:
-                        print(f'Updating user_id: {user_id}, question_id: {question_id}, predict_accuracy: {avg_predict_accuracy}, current_accuracy: {current_accuracy}, difficulty: {difficulty}, skill_id: {skill_id}')
-                        update_skill_level(user_id, skill_id, avg_predict_accuracy, current_accuracy, difficulty)
-                    except Exception as e:
-                        print(f"Error processing question_id {question_id} for user_id {user_id}: {e}")
