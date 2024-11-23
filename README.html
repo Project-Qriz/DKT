@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DKT System Documentation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/prism.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/themes/prism.min.css" rel="stylesheet" />
+</head>
+<body class="bg-gray-50">
+    <div class="max-w-4xl mx-auto p-6">
+        <!-- Language Toggle -->
+        <div class="flex justify-end gap-4 mb-6">
+            <button 
+                id="korBtn" 
+                class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                onclick="toggleLanguage('ko')"
+            >
+                한글
+            </button>
+            <button 
+                id="engBtn" 
+                class="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                onclick="toggleLanguage('en')"
+            >
+                English
+            </button>
+        </div>
+
+        <!-- Korean Content -->
+        <div id="koContent">
+            <h1 class="text-4xl font-bold mb-8">Deep Knowledge Tracing (DKT) 시스템</h1>
+
+            <p class="mb-6">학습자의 문제 풀이 기록을 기반으로 맞춤형 문제를 추천해주는 Deep Knowledge Tracing 시스템 구현체입니다. LSTM 기반의 딥러닝을 활용하여 학습자의 성취도를 예측하고 적절한 문제를 추천합니다.</p>
+
+            <h2 class="text-2xl font-bold mb-4">🌟 주요 기능</h2>
+            <ul class="list-disc pl-6 mb-6">
+                <li>학습자의 지식 상태 실시간 예측</li>
+                <li>개인화된 문제 난이도 추천</li>
+                <li>MySQL 데이터베이스 연동으로 데이터 영속성 보장</li>
+                <li>타 시스템과의 쉬운 연동을 위한 Flask API 제공</li>
+                <li>다중 스킬 및 난이도 레벨 지원</li>
+                <li>문제 풀이 소요 시간을 활용한 정확한 예측</li>
+            </ul>
+
+            <h2 class="text-2xl font-bold mb-4">🛠 시스템 구조</h2>
+            <p class="mb-4">시스템은 세 가지 주요 컴포넌트로 구성됩니다:</p>
+            
+            <h3 class="text-xl font-bold mb-2">1. DKT 모델 (dkt.py)</h3>
+            <ul class="list-disc pl-6 mb-4">
+                <li>지식 추적을 위한 LSTM 기반 신경망</li>
+                <li>문제 및 응답 표현을 위한 임베딩 레이어</li>
+                <li>풀이 시간 특성 통합</li>
+                <li>모델 학습 및 예측 기능</li>
+            </ul>
+
+            <h2 class="text-2xl font-bold mb-4">💻 설치 요구사항</h2>
+            <pre><code class="language-bash">
+- Python 3.7+
+- PyTorch
+- Flask
+- PyMySQL
+- NumPy
+            </code></pre>
+
+            <h2 class="text-2xl font-bold mb-4">📊 데이터베이스 스키마</h2>
+            <pre><code class="language-sql">
+CREATE TABLE user_activity (
+    activity_id INT PRIMARY KEY,
+    user_id INT,
+    question_id INT,
+    correct BOOLEAN,
+    time_spent INT,
+    created_at TIMESTAMP
+);
+            </code></pre>
+        </div>
+
+        <!-- English Content -->
+        <div id="enContent" class="hidden">
+            <h1 class="text-4xl font-bold mb-8">Deep Knowledge Tracing (DKT) System</h1>
+
+            <p class="mb-6">This repository contains an implementation of a Deep Knowledge Tracing system that provides personalized question recommendations based on user interaction history. The system uses LSTM-based deep learning to predict student performance and recommend appropriate questions.</p>
+
+            <h2 class="text-2xl font-bold mb-4">🌟 Features</h2>
+            <ul class="list-disc pl-6 mb-6">
+                <li>Real-time prediction of student knowledge state</li>
+                <li>Personalized question difficulty recommendations</li>
+                <li>Integration with MySQL database for data persistence</li>
+                <li>Flask API for easy integration with other systems</li>
+                <li>Support for multiple skills and difficulty levels</li>
+                <li>Time-spent feature integration for better prediction accuracy</li>
+            </ul>
+
+            <h2 class="text-2xl font-bold mb-4">🛠 Architecture</h2>
+            <p class="mb-4">The system consists of three main components:</p>
+            
+            <h3 class="text-xl font-bold mb-2">1. DKT Model (dkt.py)</h3>
+            <ul class="list-disc pl-6 mb-4">
+                <li>LSTM-based neural network for knowledge tracing</li>
+                <li>Embedding layers for question and response representation</li>
+                <li>Time-spent feature integration</li>
+                <li>Model training and prediction capabilities</li>
+            </ul>
+
+            <h2 class="text-2xl font-bold mb-4">💻 Prerequisites</h2>
+            <pre><code class="language-bash">
+- Python 3.7+
+- PyTorch
+- Flask
+- PyMySQL
+- NumPy
+            </code></pre>
+
+            <h2 class="text-2xl font-bold mb-4">📊 Database Schema</h2>
+            <pre><code class="language-sql">
+CREATE TABLE user_activity (
+    activity_id INT PRIMARY KEY,
+    user_id INT,
+    question_id INT,
+    correct BOOLEAN,
+    time_spent INT,
+    created_at TIMESTAMP
+);
+            </code></pre>
+        </div>
+    </div>
+
+    <script>
+        function toggleLanguage(lang) {
+            const koContent = document.getElementById('koContent');
+            const enContent = document.getElementById('enContent');
+            const koBtn = document.getElementById('korBtn');
+            const engBtn = document.getElementById('engBtn');
+
+            if (lang === 'ko') {
+                koContent.classList.remove('hidden');
+                enContent.classList.add('hidden');
+                koBtn.classList.remove('bg-gray-500');
+                koBtn.classList.add('bg-blue-500');
+                engBtn.classList.remove('bg-blue-500');
+                engBtn.classList.add('bg-gray-500');
+            } else {
+                koContent.classList.add('hidden');
+                enContent.classList.remove('hidden');
+                koBtn.classList.remove('bg-blue-500');
+                koBtn.classList.add('bg-gray-500');
+                engBtn.classList.remove('bg-gray-500');
+                engBtn.classList.add('bg-blue-500');
+            }
+        }
+
+        // Initialize Prism.js
+        Prism.highlightAll();
+    </script>
+</body>
+</html>
