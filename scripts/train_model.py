@@ -1,5 +1,8 @@
 import logging
 import traceback
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.dkt import UserActivityDataset, load_activities, DKTModel, train, save_model
 from torch.utils.data import DataLoader
