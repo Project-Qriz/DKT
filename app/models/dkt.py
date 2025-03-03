@@ -1,10 +1,8 @@
-import json
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import Module, Embedding, LSTM, Linear, Dropout
 import torch.nn.functional as F
 import pymysql
-from db_update import update_predictions
 from datetime import datetime
 import os
 import numpy as np
@@ -189,6 +187,30 @@ def load_model(model_path, current_num_q):
         print("No saved model found. Training new model...")
         return None
 
+
+def load_model_v2(model_path):
+    if os.path.exists(model_path):
+        try:
+            checkpoint = torch.load(model_path)
+            num_q = checkpoint.get('num_q')
+
+            if num_q is None:
+                print("The saved model doesn't have num_q information")
+                return None
+
+            model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model.eval()
+            print(f"Model loaded with num_q = {num_q}")
+            return model, num_q
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return None
+    else:
+        print("No saved model found")
+        return None
+
+
 # 메인 실행 함수
 def main():
     activities = load_activities()
@@ -206,7 +228,7 @@ def main():
     train_dataset = UserActivityDataset(activities, max_seq_len, num_q)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     
-    model_path = 'dkt_model.pth'
+    model_path = '../../dkt_model.pth'
     
     model = load_model(model_path, num_q)
     if model is None:
