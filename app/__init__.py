@@ -13,12 +13,19 @@ def create_app(config_name=None):
     config_name = os.getenv('FLASK_ENV', 'local')
 
   app = Flask(__name__)
-  app.config.from_object(config[config_name])
-  CORS(app)
 
   # 설정 초기화
   config[config_name].init_app(app)
+  config_instance = config[config_name]()
+  config_instance.init_app(app)
+
   logger.info(f"Config: {config_name}")
+  logger.info(f"DB_HOST: {app.config['DB_HOST']}")
+  logger.info(f"PORT: {app.config['PORT']}")
+  logger.info(f"HOST: {app.config['HOST']}")
+  logger.info(f"DATABASE: {app.config['DB_DATABASE']}")
+
+  CORS(app)
 
   # Blueprint 등록
   init_api(app)

@@ -12,6 +12,14 @@ class Config:
   HOST = None
   PORT = None
 
-  @staticmethod
-  def init_app(app):
-    pass
+  def init_app(cls, app):
+    # 이 메서드에서 환경 변수를 로드하고 설정을 적용
+    app.config['DB_HOST'] = cls.DB_HOST
+    app.config['DB_DATABASE'] = cls.DB_DATABASE
+    app.config['DB_USER'] = cls.DB_USER
+    app.config['DB_PASSWORD'] = cls.DB_PASSWORD
+    app.config['HOST'] = cls.HOST or 'localhost'
+    app.config['PORT'] = cls.PORT
+    app.config['DEBUG'] = cls.DEBUG
+    app.config['MODEL_PATH'] = cls.MODEL_PATH
+    app.config['MAX_SEQ_LEN'] = cls.MAX_SEQ_LEN
