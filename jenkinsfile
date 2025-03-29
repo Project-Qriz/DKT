@@ -1,0 +1,134 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = 'qriz-dkt'
+        DOCKER_TAG = "${BUILD_NUMBER}"
+        AWS_REGION = 'ap-northeast-2'
+        ECR_REGISTRY = '314146328505.dkr.ecr.ap-northeast-2.amazonaws.com'
+        AWS_CREDENTIALS = 'aws-credentials'
+        ENV_FILE = 'dev-env-file'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'dev', credentialsId: 'github-token', url: 'https://github.com/Project-Qriz/DKT.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                withCredentials([file(credentialsId: 'dev-env-file', variable: 'ENV_FILE')]) {
+                    // 파일 내용 읽기
+                    sh "cat \${ENV_FILE} > .dev.env"
+
+                    sh """
+                        docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                        docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}",
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                            docker tag ${DOCKER_IMAGE}:latest 314146328505.dkr.ecr.ap-northeast-2.amazonaws.com/qriz/dkt:latest
+                            docker push 314146328505.dkr.ecr.ap-northeast-2.amazonaws.com/qriz/dkt:latest
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to DKT Server') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'model-server-ssh-key', keyFileVariable: 'SSH_KEY'),
+                    file(credentialsId: 'dev-env-file', variable: 'ENV_FILE'),
+                    [
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: "${AWS_CREDENTIALS}",
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]
+                ]) {
+                    // 실행할 스크립트 파일 생성
+                    writeFile file: 'deploy.sh', text: '''#!/bin/bash
+                    # 5001 포트를 사용하는 컨테이너 찾기
+                    CONTAINER_ID=$(docker ps | grep 5001 | awk '{print $1}')
+                    if [ ! -z "$CONTAINER_ID" ]; then
+                        echo "5001 포트를 사용하는 컨테이너 $CONTAINER_ID 를 중지합니다."
+                        docker stop $CONTAINER_ID
+                        docker rm $CONTAINER_ID
+                    fi
+
+                    # 기존 dkt-container 제거
+                    docker rm -f dkt-container || true
+
+                    # 새 이미지 가져오기 및 실행
+                    docker pull 314146328505.dkr.ecr.ap-northeast-2.amazonaws.com/qriz/dkt:latest
+                    docker run -d --name dkt-container -p 5001:5001 \\
+                      314146328505.dkr.ecr.ap-northeast-2.amazonaws.com/qriz/dkt:latest
+
+                    # 사용하지 않는 Docker 이미지 정리
+                    echo "사용하지 않는 Docker 이미지를 정리합니다."
+
+                    # dangling 이미지(태그가 없는 이미지) 제거
+                    docker image prune -f
+
+                    # 현재 실행 중이 아닌 모든 컨테이너 제거
+                    docker container prune -f
+
+                    # 이전 버전의 qriz/dkt 이미지를 제외한 모든 이미지 유지 (최신 5개만 유지)
+                    docker images | grep "qriz/dkt" | grep -v "latest" | sort -r | awk 'NR>5 {print $3}' | xargs -r docker rmi
+                    '''
+
+                    // 스크립트 파일을 대상 서버로 전송하고 실행
+                    sh '''
+                        chmod +x deploy.sh
+                        scp -i ${SSH_KEY} -o StrictHostKeyChecking=no deploy.sh ec2-user@10.0.2.178:~/deploy.sh
+
+                        ssh -i ${SSH_KEY} -o StrictHostKeyChecking=no ec2-user@10.0.2.178 "
+                            # AWS ECR 로그인
+                            export AWS_ACCESS_KEY_ID='${AWS_ACCESS_KEY_ID}' &&
+                            export AWS_SECRET_ACCESS_KEY='${AWS_SECRET_ACCESS_KEY}' &&
+                            aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin 314146328505.dkr.ecr.ap-northeast-2.amazonaws.com &&
+
+                            # 스크립트 실행
+                            chmod +x ~/deploy.sh &&
+                            ~/deploy.sh
+                        "
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Flask DKT 도커 이미지 빌드 및 배포가 성공적으로 완료되었습니다!'
+            slackSend(
+                color: 'good',
+                message: "DKT 빌드 성공 :white_check_mark: - ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|상세 보기>)"
+            )
+        }
+        failure {
+            echo 'DKT 배포 중 오류가 발생했습니다.'
+            slackSend(
+                color: 'danger',
+                message: "DKT 빌드 실패 :x: - ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|상세 보기>)"
+            )
+            // 실패 시 이전 버전으로 롤백하는 로직 추가 기능
+        }
+    }
+}
