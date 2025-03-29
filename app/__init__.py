@@ -8,14 +8,13 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+
 def create_app(config_name=None):
   if config_name is None:
-    config_name = os.getenv('FLASK_ENV', 'local')
+    config_name = os.getenv('FLASK_ENV', 'default')
 
   app = Flask(__name__)
 
-  # 설정 초기화
-  config[config_name].init_app(app)
   config_instance = config[config_name]()
   config_instance.init_app(app)
 
@@ -27,7 +26,6 @@ def create_app(config_name=None):
 
   CORS(app)
 
-  # Blueprint 등록
   init_api(app)
 
   return app

@@ -46,7 +46,7 @@ class LocalConfig(Config):
         self.PORT = os.getenv('PORT')
 
 config = {
-    'dev': DevelopmentConfig(),
-    'local': LocalConfig(),
-    'default': LocalConfig()
+    'dev': DevelopmentConfig,
+    'local': LocalConfig,
+    'default': LocalConfig
 }

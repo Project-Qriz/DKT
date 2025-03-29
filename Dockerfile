@@ -7,7 +7,7 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-ENV FLASK_ENV=development
+ENV FLASK_ENV=dev
 
 EXPOSE 5001
 
