@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+COPY .prod.env /app/env/
+
+ENV FLASK_ENV=prod
+
+EXPOSE 5001
+
+CMD ["python", "run.py"]
