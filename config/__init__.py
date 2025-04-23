@@ -12,6 +12,23 @@ logger = logging.getLogger(__name__)
 ROOT_DIR = pathlib.Path(__file__).parent.parent.absolute()
 
 
+class LocalConfig(Config):
+    DEBUG = True
+
+    def __init__(self):
+        env_path = os.path.join(ROOT_DIR, 'env', '.env')
+        logger.debug(f'Loading env from: {env_path}')
+        load_dotenv(env_path)
+
+        logger.debug('LocalConfig initialized')
+        self.DB_HOST = os.getenv('DB_HOST')
+        self.DB_DATABASE = os.getenv('DB_DATABASE')
+        self.DB_USER = os.getenv('DB_USER')
+        self.DB_PASSWORD = os.getenv('DB_PASSWORD')
+        self.HOST = os.getenv('HOST', 'localhost')
+        self.PORT = os.getenv('PORT')
+
+
 class DevelopmentConfig(Config):
     DEBUG = True
 
@@ -29,15 +46,11 @@ class DevelopmentConfig(Config):
         self.PORT = os.getenv('PORT')
 
 
-class LocalConfig(Config):
-    DEBUG = True
-
+class ProductionConfig(Config):
     def __init__(self):
-        env_path = os.path.join(ROOT_DIR, 'env', '.env')
-        logger.debug(f'Loading env from: {env_path}')
+        env_path = os.path.join(ROOT_DIR, 'env', '.prod.env')
         load_dotenv(env_path)
 
-        logger.debug('LocalConfig initialized')
         self.DB_HOST = os.getenv('DB_HOST')
         self.DB_DATABASE = os.getenv('DB_DATABASE')
         self.DB_USER = os.getenv('DB_USER')
@@ -46,6 +59,7 @@ class LocalConfig(Config):
         self.PORT = os.getenv('PORT')
 
 config = {
+    'prod': ProductionConfig,
     'dev': DevelopmentConfig,
     'local': LocalConfig,
     'default': LocalConfig
