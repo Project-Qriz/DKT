@@ -14,4 +14,10 @@ class ModelService:
         activities = data['activities']
         dataset = UserActivityDataset(activities, user_id, max_seq_len=100, num_q=self.num_q)
         predictions = predict(self.model, dataset, self.num_q, user_id)
-        return {'user_id': user_id, 'predictions': predictions}
+
+        # NumPy 배열을 Python 리스트로 변환
+        serializable_predictions = {}
+        for uid, preds in predictions.items():
+            serializable_predictions[str(uid)] = preds.tolist()  # ndarray를 list로 변환 및 키를 문자열로 변환
+
+        return {'user_id': user_id, 'predictions': serializable_predictions}
