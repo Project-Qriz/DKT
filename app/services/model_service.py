@@ -1,4 +1,5 @@
-from app.models.dkt import load_model, load_model_v2, UserActivityDataset
+from app.models.dkt import load_model, load_model_v2, UserActivityDataset, predict
+
 
 class ModelService:
     def __init__(self):
@@ -12,5 +13,5 @@ class ModelService:
         user_id = data['user_id']
         activities = data['activities']
         dataset = UserActivityDataset(activities, user_id, max_seq_len=100, num_q=self.num_q)
-        predictions = self.model.predict(dataset)
+        predictions = predict(self.model, dataset, self.num_q, user_id)
         return {'user_id': user_id, 'predictions': predictions}
