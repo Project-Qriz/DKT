@@ -72,7 +72,7 @@ pipeline {
                         echo "인스턴스 리프레시 상태 확인 중..."
                         aws autoscaling describe-instance-refreshes \\
                           --auto-scaling-group-name ${ASG_NAME} \\
-                          --limit 1
+                          --max-records 1
                     """
                 }
             }
