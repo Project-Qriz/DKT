@@ -5,7 +5,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.dkt import UserActivityDataset, load_activities, DKTModel, train, save_model
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 import torch
 
 logging.basicConfig(level=logging.DEBUG)
@@ -17,8 +17,14 @@ def train_new_model():
     activities = load_activities()
     num_q = len(set(activity['skill_id'] for activity in activities))
     logger.info(f"Number of questions: {num_q}")
-
-    train_dataset = UserActivityDataset(activities, max_seq_len=100, num_q=num_q)
+    
+    max_seq_len = 100
+    
+    # user_id 별 Dataset 생성하고 ConcatDateset 으로 합침
+    user_ids = sorted({a['user_id'] for a in acts})
+    datasets = [UserActivityDataset([a for a in acts if a ['user_id'] == uid], uid, max_seq_len=max_seq_len, num_q=num_q) for uid in user_ids]
+    train_dataset = ConcatDataset(datasets)
+    
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
     model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)

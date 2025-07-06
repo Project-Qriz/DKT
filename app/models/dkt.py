@@ -30,17 +30,42 @@ def load_activities():
         try:
             with conn.cursor() as cursor:
                 sql = """
-                SELECT ua.*, activity_id, ua.user_id, ua.question_id, ua.checked, ua.time_spent, 
-                       q.skill_id, q.difficulty, q.answer
+                SELECT ua.*, q.skill_id, q.difficulty
                 FROM user_activity ua
                 JOIN question q ON ua.question_id = q.question_id
                 WHERE q.category = 2
                 """
                 cursor.execute(sql)
                 activities = cursor.fetchall()
-                return activities
+                print(f"[dkt.py] load_activities fetched rows: {len(activities)}")
+
+                # 필수 컬럼들이 None이면 버리기 + 경고 로그
+                cleaned_activities = []
+                for a in activities:
+                    if (a['skill_id'] is None or
+                        a['time_spent'] is None or
+                        ('correction' not in a and 'correct' not in a)):
+                        print(f"[dkt.py][WARN] activity 필수값 누락: {a}")
+                        continue
+                    cleaned_activities.append(a)
+
+                if not cleaned_activities:
+                    print("[dkt.py][ERROR] 유효한 활동 데이터가 없습니다!")
+                    return []
+
+                print(f"[dkt.py] 유효 activities 개수: {len(cleaned_activities)}")
+                for i, a in enumerate(cleaned_activities[:3]):
+                    print(f"[dkt.py] sample activity {i}: {a}")
+
+                # ---- skill_id를 인덱스로 매핑 ----
+                all_skill_ids = sorted({a['skill_id'] for a in cleaned_activities})
+                skill_id_to_idx = {sid: i for i, sid in enumerate(all_skill_ids)}
+                for a in cleaned_activities:
+                    a['skill_id_idx'] = skill_id_to_idx[a['skill_id']]
+
+                return cleaned_activities
         except Exception as e:
-            print(f"Failed to load data due to {e}")
+            print(f"[dkt.py] Failed to load data due to {e}")
         finally:
             conn.close()
     return []
@@ -75,26 +100,28 @@ class UserActivityDataset(Dataset):
         self.activities = activities
         self.max_seq_len = max_seq_len
         self.num_q = num_q
-        self.user_id = user_id  # user_id를 인스턴스 변수로 저장
+        self.user_id = user_id
 
     def __len__(self):
-        return 1  # 단일 사용자 데이터셋이므로 길이는 1
+        return 1
 
     def __getitem__(self, idx):
-        user_activities = self.activities  # 이미 단일 사용자의 활동만 포함되어 있다고 가정
-        
-        q_ids = [activity['question_id'] for activity in user_activities]
-        responses = [1 if activity['correct'] == 1 else 0 for activity in user_activities]
-        times_spent = [activity['time_spent'] for activity in user_activities]
-        
-        seq_len = len(q_ids)
+        print(f"[dkt.py] __getitem__ 호출 - user_id: {self.user_id}, activities count: {len(self.activities)}")
+        if not self.activities:
+            print("[dkt.py][ERROR] No activities found in dataset!")
+            raise RuntimeError("No activities found in dataset!")
 
-        # Ensure indices are within the embedding range
+        q_ids = [a['skill_id_idx'] for a in self.activities]
+        print(f"[dkt.py] q_ids (skill_id_idx): {q_ids}")
+
+        responses = [1 if (a.get('correction', a.get('correct'))) == 1 else 0 for a in self.activities]
+        times_spent = [a['time_spent'] for a in self.activities]
+
+        seq_len = len(q_ids)
         q_ids = [min(q_id, self.num_q - 1) for q_id in q_ids]
 
-        # Padding 처리
         if seq_len < self.max_seq_len:
-            q_ids += [self.num_q * 2] * (self.max_seq_len - seq_len)  # Use out-of-bound index for padding
+            q_ids += [self.num_q * 2] * (self.max_seq_len - seq_len)
             responses += [0] * (self.max_seq_len - seq_len)
             times_spent += [0] * (self.max_seq_len - seq_len)
         else:
@@ -102,13 +129,18 @@ class UserActivityDataset(Dataset):
             responses = responses[:self.max_seq_len]
             times_spent = times_spent[:self.max_seq_len]
 
-        return torch.tensor(q_ids, dtype=torch.long), torch.tensor(responses, dtype=torch.long), torch.tensor(times_spent, dtype=torch.float), self.user_id
+        return (
+            torch.tensor(q_ids, dtype=torch.long),
+            torch.tensor(responses, dtype=torch.long),
+            torch.tensor(times_spent, dtype=torch.float),
+            self.user_id
+        )
 
 # 모델 훈련 함수
 def train_model(train_loader, num_q, num_epochs=10):
     model = DKTModel(num_q=num_q, emb_size=128, hidden_size=256)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    
+
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -122,8 +154,8 @@ def train_model(train_loader, num_q, num_epochs=10):
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f'Epoch {epoch + 1}, Loss: {total_loss}')
-    
+        print(f'[train_model] Epoch {epoch + 1}, Loss: {total_loss}')
+
     return model
 
 # 모델 훈련 함수
@@ -134,14 +166,14 @@ def train(model, train_loader, optimizer, num_epochs=10):
         for questions, responses, times_spent, _ in train_loader:
             optimizer.zero_grad()
             predictions = model(questions, responses, times_spent)
-            predictions = predictions.view(-1, predictions.size(-1))  # (batch_size * seq_len, num_q)
-            responses = responses.view(-1)  # (batch_size * seq_len)
-            predictions = predictions.gather(1, responses.view(-1, 1)).squeeze(1)  # gather predictions for the actual questions
+            predictions = predictions.view(-1, predictions.size(-1))
+            responses = responses.view(-1)
+            predictions = predictions.gather(1, responses.view(-1, 1)).squeeze(1)
             loss = F.binary_cross_entropy(predictions, responses.float())
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f'Epoch {epoch + 1}, Loss: {total_loss}')
+        print(f'[train] Epoch {epoch + 1}, Loss: {total_loss}')
 
 
 # 예측 함수
@@ -149,7 +181,7 @@ def predict(model, dataset, num_q, user_id):
     model.eval()
     predictions = {}
     with torch.no_grad():
-        questions, responses, times_spent, _ = dataset[0]  # 단일 사용자 데이터셋이므로 인덱스 0
+        questions, responses, times_spent, _ = dataset[0]
         output = model(questions.unsqueeze(0), responses.unsqueeze(0), times_spent.unsqueeze(0))
         preds = output.squeeze(0).detach().numpy()
         predictions[user_id] = preds
@@ -161,31 +193,41 @@ def save_model(model, num_q, model_path='dkt_model.pth'):
         'model_state_dict': model.state_dict(),
         'num_q': num_q
     }, model_path)
-    print(f"Model saved with num_q = {num_q}")
+    print(f"[dkt.py] Model saved with num_q = {num_q}")
 
 # 모델 로드 함수
 def load_model(model_path, current_num_q):
     if os.path.exists(model_path):
         checkpoint = torch.load(model_path)
         saved_num_q = checkpoint.get('num_q')
-        
+
         if saved_num_q is None:
-            print("The saved model doesn't have num_q information. Training new model...")
+            print("[dkt.py] The saved model doesn't have num_q information. Training new model...")
             return None
-        
+
         if saved_num_q != current_num_q:
-            print(f"Mismatch in num_q: saved={saved_num_q}, current={current_num_q}")
-            print("Training new model...")
+            print(f"[dkt.py] Mismatch in num_q: saved={saved_num_q}, current={current_num_q}")
+            print("[dkt.py] Training new model...")
             return None
-        
+
         model = DKTModel(num_q=current_num_q, emb_size=128, hidden_size=256)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
-        print(f"Model loaded with num_q = {current_num_q}")
+        print(f"[dkt.py] Model loaded with num_q = {current_num_q}")
         return model
     else:
-        print("No saved model found. Training new model...")
+        print("[dkt.py] No saved model found. Training new model...")
         return None
+
+def correction_to_int(correction):
+    if isinstance(correction, bool):
+        return int(correction)
+    elif isinstance(correction, int):
+        return correction
+    elif isinstance(correction, bytes):
+        return int.from_bytes(correction, 'little')
+    else:
+        return 0
 
 
 def load_model_v2(model_path):
